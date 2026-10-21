@@ -1,8 +1,15 @@
-# TaGunner RT + PostFX Lab v0.4
+# TaGunner RT + PostFX Lab v0.5
 
 Standalone offline Android GPU lab for **iQOO 13** (and other ARM64 Android Vulkan devices).
 
-## Latest fixes (v0.4)
+## v0.5 experimental hardware ray-traced scene
+- New **เรนเดอร์ 3D ด้วย Hardware Ray Query** button creates a triangle/cube + floor BLAS, TLAS, compute pipeline and GPU storage buffer, then executes a `rayQueryEXT` shader for primary visibility and cast shadows.
+- Displays the resulting Vulkan GPU image in the app and displays a detailed error if the device fails.
+- The Vulkan SDK's `glslangValidator` compiles `shaders/rt_scene.comp` into an APK asset during GitHub Actions build.
+- **Not yet device-tested**. Success must be verified from the actual rendered image, not from compile alone.
+- Does NOT modify or enable Ray Tracing inside Roblox. Requires renderer/game integration as a separate project.
+
+## Fixes introduced in v0.4
 - Correct flipped Roblox screenshot preview in OpenGL ES.
 - Respect Android 15/16 edge-to-edge status/navigation bars.
 - Keep PostFX preview near the controls instead of leaving large vertical gaps.

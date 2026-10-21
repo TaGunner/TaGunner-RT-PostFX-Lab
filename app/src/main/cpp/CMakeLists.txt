@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(tagunner_rt_lab LANGUAGES CXX)
-add_library(tagunner_rt SHARED rt_probe.cpp)
+add_library(tagunner_rt SHARED rt_probe.cpp rt_render.cpp)
 set_target_properties(tagunner_rt PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
-target_link_libraries(tagunner_rt vulkan log)
+target_link_libraries(tagunner_rt vulkan log android)

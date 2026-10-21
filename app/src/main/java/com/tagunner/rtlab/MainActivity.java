@@ -25,6 +25,7 @@ import java.io.InputStream;
 public final class MainActivity extends Activity {
   static { System.loadLibrary("tagunner_rt"); }
   private static native String inspectVulkan();
+  private static native int[] renderRayQueryScene(android.content.res.AssetManager assets,int width,int height);
   private TextView report,tip;
   private LinearLayout scanPanel,fxPanel;
   private PostFXView fx;
@@ -68,6 +69,13 @@ public final class MainActivity extends Activity {
     scanPanel.addView(text("นี่คือการตรวจความสามารถ Vulkan จาก GPU จริง ไม่ใช่การเปิด RTX ใน Roblox",13,0xffd9e5f8));
     Button scan=button("ตรวจ GPU + ทดลองเปิด Ray Query Device");scanPanel.addView(scan);
     Button copy=button("คัดลอกผลตรวจส่งแชต");scanPanel.addView(copy);
+    Button scene=button("เรนเดอร์ 3D ด้วย Hardware Ray Query");
+    scanPanel.addView(scene);
+    TextView sceneStatus=text("ทดลองสร้าง BLAS/TLAS แล้วยิงรังสีสร้างภาพบน GPU จริง",12,0xffb1c9e4);
+    scanPanel.addView(sceneStatus);
+    android.widget.ImageView sceneImage=new android.widget.ImageView(this);
+    sceneImage.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+    scanPanel.addView(sceneImage,new LinearLayout.LayoutParams(-1,dp(236)));
     ScrollView scroll=new ScrollView(this);scanPanel.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     report=text("กดตรวจ GPU เพื่ออ่าน Vulkan Extensions / Features / การสร้างอุปกรณ์ RT",13,0xffb3ffdc);
     report.setTypeface(Typeface.MONOSPACE);report.setTextIsSelectable(true);
@@ -90,6 +98,30 @@ public final class MainActivity extends Activity {
     root.addView(fxPanel,new LinearLayout.LayoutParams(-1,0,1));
     setContentView(root);
     vkBtn.setOnClickListener(v->showFx(false));fxBtn.setOnClickListener(v->showFx(true));
+    scene.setOnClickListener(v->{
+      scene.setEnabled(false);
+      sceneStatus.setText("กำลังสร้าง Acceleration Structures และเรนเดอร์ด้วย Vulkan...");
+      new Thread(()->{
+        final int w=480,h=300;
+        android.graphics.Bitmap bitmap=null;
+        String status;
+        try{
+          int[] pixels=renderRayQueryScene(getAssets(),w,h);
+          if(pixels==null||pixels.length!=w*h)throw new IllegalStateException("Invalid GPU image size");
+          bitmap=android.graphics.Bitmap.createBitmap(pixels,w,h,android.graphics.Bitmap.Config.ARGB_8888);
+          status="Hardware Ray Query render SUCCESS: "+w+" × "+h+" (BLAS + TLAS + rayQueryEXT)";
+        }catch(Throwable err){
+          status="Hardware Ray Query renderer FAILED: "+err.getClass().getSimpleName()+": "+err.getMessage();
+        }
+        final android.graphics.Bitmap b=bitmap;
+        final String t=status;
+        runOnUiThread(()->{
+          if(b!=null)sceneImage.setImageBitmap(b);
+          sceneStatus.setText(t);
+          scene.setEnabled(true);
+        });
+      }).start();
+    });
     scan.setOnClickListener(v->{
       scan.setEnabled(false);report.setText("Scanning Vulkan...");
       new Thread(()->{

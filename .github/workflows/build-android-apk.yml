@@ -30,6 +30,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Compile Vulkan Hardware Ray Query compute shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v glslangValidator >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y glslang-tools
+          fi
+          mkdir -p app/src/main/assets
+          glslangValidator -V --target-env vulkan1.2 -S comp shaders/rt_scene.comp -o app/src/main/assets/rt_scene.spv
+          test -s app/src/main/assets/rt_scene.spv
       - name: Compile debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - name: Verify debug signature
