@@ -27,6 +27,7 @@ public final class MainActivity extends Activity {
   private static native String inspectVulkan();
   private static native int[] renderRayQueryScene(android.content.res.AssetManager assets,int width,int height);
   private static native String benchmarkRayQuery(android.content.res.AssetManager assets,int width,int height,int passes);
+  private static native int[] renderLightFrame(android.content.res.AssetManager assets,int phase);
   private TextView report,tip;
   private LinearLayout scanPanel,fxPanel;
   private PostFXView fx;
@@ -61,7 +62,7 @@ public final class MainActivity extends Activity {
       });
     }
     root.addView(text("TaGunner  |  RT + PostFX Lab",22,0xff9eceff));
-    root.addView(text("v0.6  •  Offline  •  Ray Query benchmark + GPU PostFX",12,0xff8aabc7));
+    root.addView(text("v0.7  •  Offline  •  Moving light Ray Query + GPU PostFX",12,0xff8aabc7));
     LinearLayout tabs=new LinearLayout(this);tabs.setOrientation(0);
     Button vkBtn=button("Vulkan / Ray Tracing"),fxBtn=button("GPU PostFX");
     tabs.addView(vkBtn,new LinearLayout.LayoutParams(0,dp(50),1f));
@@ -77,14 +78,44 @@ public final class MainActivity extends Activity {
     scanPanel.addView(text("RT Benchmark • ชาร์จแบตให้เพียงพอ และพักเครื่องถ้าร้อนเกินไป",12,0xffffd6a5));
     Button benchLow=button("Benchmark 480×300 • 16 เฟรม");
     Button benchHigh=button("Benchmark 720p • 8 เฟรม");
+    Button bench1080=button("Benchmark 1080p • 4 เฟรม");
     scanPanel.addView(benchLow);
     scanPanel.addView(benchHigh);
+    scanPanel.addView(bench1080);
     TextView benchStatus=text("ยังไม่ได้วัด GPU • ตัวเลขที่ได้เป็นเวลา Dispatch ของฉากนิ่ง ไม่ใช่ FPS ของ Roblox",12,0xffd9f6cf);
     benchStatus.setTextIsSelectable(true);
     scanPanel.addView(benchStatus);
     android.widget.ImageView sceneImage=new android.widget.ImageView(this);
     sceneImage.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
     scanPanel.addView(sceneImage,new LinearLayout.LayoutParams(-1,dp(236)));
+    Button lightA=button("แสงมุม A / Shadow 0");
+    Button lightB=button("แสงมุม B / Shadow 7");
+    scanPanel.addView(lightA);
+    scanPanel.addView(lightB);
+    java.util.function.IntConsumer showLight=(phase)->{
+      lightA.setEnabled(false);lightB.setEnabled(false);
+      sceneStatus.setText("GPU Ray Query กำลังเรนเดอร์เงาจากแสงมุม "+phase+"...");
+      new Thread(()->{
+        android.graphics.Bitmap bitmap=null;
+        String status;
+        try {
+          final int w=480,h=300;
+          int[] pixels=renderLightFrame(getAssets(),phase);
+          if(pixels==null||pixels.length!=w*h)throw new IllegalStateException("Invalid scene image");
+          bitmap=android.graphics.Bitmap.createBitmap(pixels,w,h,android.graphics.Bitmap.Config.ARGB_8888);
+          status="Ray-traced shadow / lighting phase "+phase+" — SUCCESS";
+        }catch(Throwable e){status="Render ERROR: "+e.getMessage();}
+        final android.graphics.Bitmap result=bitmap;
+        final String message=status;
+        runOnUiThread(()->{
+          if(result!=null)sceneImage.setImageBitmap(result);
+          sceneStatus.setText(message);
+          lightA.setEnabled(true);lightB.setEnabled(true);
+        });
+      }).start();
+    };
+    lightA.setOnClickListener(v->showLight.accept(0));
+    lightB.setOnClickListener(v->showLight.accept(7));
     ScrollView scroll=new ScrollView(this);scanPanel.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     report=text("กดตรวจ GPU เพื่ออ่าน Vulkan Extensions / Features / การสร้างอุปกรณ์ RT",13,0xffb3ffdc);
     report.setTypeface(Typeface.MONOSPACE);report.setTextIsSelectable(true);
@@ -110,10 +141,10 @@ public final class MainActivity extends Activity {
     java.util.concurrent.atomic.AtomicBoolean benchmarking=new java.util.concurrent.atomic.AtomicBoolean(false);
     java.util.function.IntConsumer doBenchmark=(preset)->{
       if(!benchmarking.compareAndSet(false,true))return;
-      benchLow.setEnabled(false);benchHigh.setEnabled(false);
-      final int w=preset==0?480:1280;
-      final int h=preset==0?300:720;
-      final int count=preset==0?16:8;
+      benchLow.setEnabled(false);benchHigh.setEnabled(false);bench1080.setEnabled(false);
+      final int w=preset==0?480:(preset==1?1280:1920);
+      final int h=preset==0?300:(preset==1?720:1080);
+      final int count=preset==0?16:(preset==1?8:4);
       benchStatus.setText("Testing "+w+"x"+h+" / "+count+" dispatches ...");
       new Thread(()->{
         String result;
@@ -122,13 +153,14 @@ public final class MainActivity extends Activity {
         final String textResult=result;
         runOnUiThread(()->{
           benchStatus.setText(textResult);
-          benchLow.setEnabled(true);benchHigh.setEnabled(true);
+          benchLow.setEnabled(true);benchHigh.setEnabled(true);bench1080.setEnabled(true);
           benchmarking.set(false);
         });
       }).start();
     };
     benchLow.setOnClickListener(v->doBenchmark.accept(0));
     benchHigh.setOnClickListener(v->doBenchmark.accept(1));
+    bench1080.setOnClickListener(v->doBenchmark.accept(2));
     scene.setOnClickListener(v->{
       scene.setEnabled(false);
       sceneStatus.setText("กำลังสร้าง Acceleration Structures และเรนเดอร์ด้วย Vulkan...");

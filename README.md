@@ -1,6 +1,13 @@
-# TaGunner RT + PostFX Lab v0.6
+# TaGunner RT + PostFX Lab v0.7
 
 Standalone offline Android GPU lab for **iQOO 13** (and other ARM64 Android Vulkan devices).
+
+## v0.7 Moving-light RT query test + 1080p
+- Ray Query shader now accepts a frame index through a Vulkan push constant and rotates the directional light per GPU dispatch. The floor and cube are **static**; BLAS/TLAS are NOT dynamically rebuilt in this version.
+- Two "Shadow A/B" preview buttons render the same objects with two different light angles to visually check **dynamic ray-traced shadows**.
+- Add a 1920×1080×4 compute-pass benchmark.
+- Benchmark timings measure GPU dispatches for moving light, not whole frames, app FPS, game FPS, continuous animation, or scene geometry updates.
+- The benchmark is experimental and may heat the phone. Charge before using high resolution.
 
 ## v0.6 Vulkan Ray Query benchmark
 - Adds two benchmark buttons: 480×300 × 16 dispatches, and 1280×720 × 8 dispatches.

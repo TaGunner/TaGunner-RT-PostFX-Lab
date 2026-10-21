@@ -3,7 +3,7 @@
 layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
 layout(set=0,binding=0) uniform accelerationStructureEXT scene;
 layout(set=0,binding=1,std430) buffer Pixels { uint pixels[]; } outputData;
-layout(push_constant) uniform Push { uint width; uint height; } pc;
+layout(push_constant) uniform Push { uint width; uint height; uint frameIndex; } pc;
 
 vec3 faceNormal(uint prim) {
     if(prim<2u) return vec3(0.,1.,0.);
@@ -36,7 +36,12 @@ void main() {
         float t=rayQueryGetIntersectionTEXT(primary,true);
         vec3 p=camera+ray*t;
         vec3 n=faceNormal(primitive);
-        vec3 light=normalize(vec3(-.8,1.8,1.1));
+        // Per-dispatch rotating light; scene geometry remains fixed.
+        // frameIndex=0 matches the original RT Lab static light.
+        float phase = float(pc.frameIndex) * .45;
+        vec3 light = normalize(vec3(-.8*cos(phase)-1.1*sin(phase),
+                                    1.8,
+                                    -.8*sin(phase)+1.1*cos(phase)));
         rayQueryEXT shadow;
         rayQueryInitializeEXT(shadow,scene,gl_RayFlagsOpaqueEXT|gl_RayFlagsTerminateOnFirstHitEXT,0xff,p+n*.035,.02,light,30.);
         while(rayQueryProceedEXT(shadow)){}

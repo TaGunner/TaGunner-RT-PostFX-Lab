@@ -260,7 +260,7 @@ static std::vector<float> geometry() {
   quad(v,-s,0,-s, s,0,-s, s,0,s, -s,0,s);
   return v;
 }
-static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_t height,uint32_t passes=1,std::string* measurement=nullptr) {
+static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_t height,uint32_t passes=1,std::string* measurement=nullptr,uint32_t firstFrame=0) {
   Lab lab;
   lab.init();
   std::vector<float> vertices=geometry();
@@ -337,7 +337,7 @@ static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_
   VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
   dl.bindingCount=2;dl.pBindings=bindings;
   checked(vkCreateDescriptorSetLayout(lab.device,&dl,nullptr,&lab.setLayout),"Descriptor layout");
-  VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,8};
+  VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,12};
   VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
   pl.setLayoutCount=1;pl.pSetLayouts=&lab.setLayout;pl.pushConstantRangeCount=1;pl.pPushConstantRanges=&range;
   checked(vkCreatePipelineLayout(lab.device,&pl,nullptr,&lab.pipelineLayout),"Pipeline layout");
@@ -379,9 +379,9 @@ static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_
   }
   vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,lab.pipeline);
   vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,lab.pipelineLayout,0,1,&ds,0,nullptr);
-  uint32_t wh[2]={width,height};
-  vkCmdPushConstants(cmd,lab.pipelineLayout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(wh),wh);
   for(uint32_t pass=0;pass<passes;pass++){
+    uint32_t pushData[3]={width,height,firstFrame+pass};
+    vkCmdPushConstants(cmd,lab.pipelineLayout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(pushData),pushData);
     vkCmdDispatch(cmd,(width+7)/8,(height+7)/8,1);
     if(pass+1<passes){
       VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -406,7 +406,7 @@ static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_
     int written=snprintf(message,sizeof(message),
       "TaGunner Vulkan RT benchmark v0.6\n"
       "GPU: Hardware rayQueryEXT primary + shadow\n"
-      "Scene: fixed floor and cube (no animation)\n"
+      "Scene: fixed floor and cube / moving directional light\n"
       "Resolution: %u x %u\n"
       "Compute passes: %u\n"
       "CPU submit + GPU wait: %.3f ms total / %.3f ms per pass\n",
@@ -432,7 +432,7 @@ static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_
     }else{
       *measurement+="GPU timestamps unavailable; CPU timings only\n";
     }
-    *measurement+="CAUTION: This is a STATIC simple scene and GPU dispatch throughput only.\n"
+    *measurement+="CAUTION: Geometry remains STATIC; only the LIGHT changes per dispatch.\n"
       "It is NOT Roblox FPS, sustained game FPS, or an animated scene benchmark.\n";
   }
   void* src=nullptr;
@@ -476,6 +476,24 @@ Java_com_tagunner_rtlab_MainActivity_benchmarkRayQuery(JNIEnv* env,jclass,jobjec
     auto pixels=render(assets,(uint32_t)width,(uint32_t)height,(uint32_t)passes,&measurement);
     if(pixels.size()!=(size_t)width*height)throw std::runtime_error("Invalid rendered pixel buffer");
     return env->NewStringUTF(measurement.c_str());
+  }catch(const std::exception& e){
+    jclass cls=env->FindClass("java/lang/IllegalStateException");
+    if(cls)env->ThrowNew(cls,e.what());
+    return nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_tagunner_rtlab_MainActivity_renderLightFrame(JNIEnv* env,jclass,jobject assetManager,jint phase){
+  try{
+    if(phase<0||phase>100)throw std::runtime_error("Invalid light phase");
+    AAssetManager* assets=AAssetManager_fromJava(env,assetManager);
+    if(!assets)throw std::runtime_error("No AssetManager");
+    const uint32_t w=480,h=300;
+    auto pixels=render(assets,w,h,1,nullptr,(uint32_t)phase);
+    jintArray result=env->NewIntArray((jsize)pixels.size());
+    if(result)env->SetIntArrayRegion(result,0,(jsize)pixels.size(),reinterpret_cast<const jint*>(pixels.data()));
+    return result;
   }catch(const std::exception& e){
     jclass cls=env->FindClass("java/lang/IllegalStateException");
     if(cls)env->ThrowNew(cls,e.what());
