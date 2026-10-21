@@ -28,8 +28,11 @@ public final class MainActivity extends Activity {
   private static native int[] renderRayQueryScene(android.content.res.AssetManager assets,int width,int height);
   private static native String benchmarkRayQuery(android.content.res.AssetManager assets,int width,int height,int passes);
   private static native int[] renderLightFrame(android.content.res.AssetManager assets,int phase);
+  private static native String benchmarkMovingGeometry(android.content.res.AssetManager assets,int width,int height,int frames);
+  private static native int[] renderTranslatedCube(android.content.res.AssetManager assets,int position);
   private TextView report,tip;
   private LinearLayout scanPanel,fxPanel;
+  private ScrollView scanPage;
   private PostFXView fx;
   private boolean fxOpen=false,compare=true;
   private float sharp=.3f,vibrance=.3f,bloom=.2f,exposure=1f;
@@ -62,7 +65,7 @@ public final class MainActivity extends Activity {
       });
     }
     root.addView(text("TaGunner  |  RT + PostFX Lab",22,0xff9eceff));
-    root.addView(text("v0.7  •  Offline  •  Moving light Ray Query + GPU PostFX",12,0xff8aabc7));
+    root.addView(text("v0.8  •  Offline  •  Moving geometry + GPU Ray Query",12,0xff8aabc7));
     LinearLayout tabs=new LinearLayout(this);tabs.setOrientation(0);
     Button vkBtn=button("Vulkan / Ray Tracing"),fxBtn=button("GPU PostFX");
     tabs.addView(vkBtn,new LinearLayout.LayoutParams(0,dp(50),1f));
@@ -82,6 +85,8 @@ public final class MainActivity extends Activity {
     scanPanel.addView(benchLow);
     scanPanel.addView(benchHigh);
     scanPanel.addView(bench1080);
+    Button dynamicBench=button("Benchmark กล่องเคลื่อนที่ BLAS/TLAS 12 เฟรม (480×300)");
+    scanPanel.addView(dynamicBench);
     TextView benchStatus=text("ยังไม่ได้วัด GPU • ตัวเลขที่ได้เป็นเวลา Dispatch ของฉากนิ่ง ไม่ใช่ FPS ของ Roblox",12,0xffd9f6cf);
     benchStatus.setTextIsSelectable(true);
     scanPanel.addView(benchStatus);
@@ -92,6 +97,10 @@ public final class MainActivity extends Activity {
     Button lightB=button("แสงมุม B / Shadow 7");
     scanPanel.addView(lightA);
     scanPanel.addView(lightB);
+    Button cubeLeft=button("กล่องตำแหน่งซ้าย — Ray Query");
+    Button cubeRight=button("กล่องตำแหน่งขวา — Ray Query");
+    scanPanel.addView(cubeLeft);
+    scanPanel.addView(cubeRight);
     java.util.function.IntConsumer showLight=(phase)->{
       lightA.setEnabled(false);lightB.setEnabled(false);
       sceneStatus.setText("GPU Ray Query กำลังเรนเดอร์เงาจากแสงมุม "+phase+"...");
@@ -116,11 +125,38 @@ public final class MainActivity extends Activity {
     };
     lightA.setOnClickListener(v->showLight.accept(0));
     lightB.setOnClickListener(v->showLight.accept(7));
-    ScrollView scroll=new ScrollView(this);scanPanel.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    java.util.function.IntConsumer showCube=(pos)->{
+      cubeLeft.setEnabled(false);cubeRight.setEnabled(false);
+      sceneStatus.setText("Rendering cube position "+pos+"...");
+      new Thread(()->{
+        String message;
+        android.graphics.Bitmap image=null;
+        try{
+          final int w=480,h=300;
+          int[] result=renderTranslatedCube(getAssets(),pos);
+          if(result==null||result.length!=w*h)throw new IllegalStateException("Bad image");
+          image=android.graphics.Bitmap.createBitmap(result,w,h,android.graphics.Bitmap.Config.ARGB_8888);
+          message="Cube "+(pos==0?"LEFT":"RIGHT")+" Ray Query scene SUCCESS";
+        }catch(Throwable t){message="Moving cube preview ERROR: "+t.getMessage();}
+        final android.graphics.Bitmap finalImage=image;
+        final String finalMessage=message;
+        runOnUiThread(()->{
+          if(finalImage!=null)sceneImage.setImageBitmap(finalImage);
+          sceneStatus.setText(finalMessage);
+          cubeLeft.setEnabled(true);cubeRight.setEnabled(true);
+        });
+      }).start();
+    };
+    cubeLeft.setOnClickListener(v->showCube.accept(0));
+    cubeRight.setOnClickListener(v->showCube.accept(1));
+    ScrollView scroll=new ScrollView(this);scanPanel.addView(scroll,new LinearLayout.LayoutParams(-1,dp(245)));
     report=text("กดตรวจ GPU เพื่ออ่าน Vulkan Extensions / Features / การสร้างอุปกรณ์ RT",13,0xffb3ffdc);
     report.setTypeface(Typeface.MONOSPACE);report.setTextIsSelectable(true);
     scroll.addView(report);
-    root.addView(scanPanel,new LinearLayout.LayoutParams(-1,0,1));
+    scanPage=new ScrollView(this);
+    scanPage.setFillViewport(false);
+    scanPage.addView(scanPanel,new ScrollView.LayoutParams(-1,-2));
+    root.addView(scanPage,new LinearLayout.LayoutParams(-1,0,1));
     fxPanel=new LinearLayout(this);fxPanel.setOrientation(1);
     Button pick=button("เลือกภาพ Roblox จากมือถือ");fxPanel.addView(pick);
     Button toggle=button("เปรียบเทียบ Before / After");fxPanel.addView(toggle);
@@ -161,6 +197,22 @@ public final class MainActivity extends Activity {
     benchLow.setOnClickListener(v->doBenchmark.accept(0));
     benchHigh.setOnClickListener(v->doBenchmark.accept(1));
     bench1080.setOnClickListener(v->doBenchmark.accept(2));
+    dynamicBench.setOnClickListener(v->{
+      if(!benchmarking.compareAndSet(false,true))return;
+      dynamicBench.setEnabled(false);
+      benchStatus.setText("Building BLAS/TLAS with a moving cube for 12 frames...");
+      new Thread(()->{
+        String reportText;
+        try{reportText=benchmarkMovingGeometry(getAssets(),480,300,12);}
+        catch(Throwable t){reportText="Moving cube benchmark FAILED: "+t;}
+        final String textValue=reportText;
+        runOnUiThread(()->{
+          benchStatus.setText(textValue);
+          dynamicBench.setEnabled(true);
+          benchmarking.set(false);
+        });
+      }).start();
+    });
     scene.setOnClickListener(v->{
       scene.setEnabled(false);
       sceneStatus.setText("กำลังสร้าง Acceleration Structures และเรนเดอร์ด้วย Vulkan...");
@@ -211,7 +263,7 @@ public final class MainActivity extends Activity {
     fx.image(demo);updateFx();fx.onPause();
   }
   private void showFx(boolean enable){
-    scanPanel.setVisibility(enable?View.GONE:View.VISIBLE);
+    scanPage.setVisibility(enable?View.GONE:View.VISIBLE);
     fxPanel.setVisibility(enable?View.VISIBLE:View.GONE);
     fxOpen=enable;
     if(enable){fx.onResume();fx.requestRender();}else fx.onPause();

@@ -1,6 +1,14 @@
-# TaGunner RT + PostFX Lab v0.7
+# TaGunner RT + PostFX Lab v0.8
 
 Standalone offline Android GPU lab for **iQOO 13** (and other ARM64 Android Vulkan devices).
+
+## v0.8 Moving geometry and acceleration-structure rebuild test
+- Two moving-cube preview positions: change cube location without moving the ground, render rayQueryEXT shadows at each location.
+- Moving geometry benchmark: 12 sequential Vulkan frames at 480×300, rebuilding BLAS and TLAS after updating cube vertices every frame; GPU timestamps (if supported) include both AS builds and ray-query compute dispatch.
+- Reports CPU submit + GPU queue wait and GPU timestamp duration per frame. This is **not** full game FPS, Roblox FPS, sustained RT performance, or continuous animation presentation.
+- The Vulkan scan screen is scrollable now, so the Shadow B and moving-cube buttons should be reachable on a small Android display.
+- First try left/right position preview; then use the movement benchmark with adequate battery charge and cooling.
+- Does not modify Roblox or bypass any feature checks.
 
 ## v0.7 Moving-light RT query test + 1080p
 - Ray Query shader now accepts a frame index through a Vulkan push constant and rotates the directional light per GPU dispatch. The floor and cube are **static**; BLAS/TLAS are NOT dynamically rebuilt in this version.

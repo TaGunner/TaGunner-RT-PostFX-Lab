@@ -32,6 +32,7 @@ struct Lab {
   VkQueryPool timingQueries=VK_NULL_HANDLE;
   uint32_t timestampValidBits=0;
   float timestampPeriod=0.f;
+  VkDeviceAddress blasScratch=0,tlasScratch=0;
   VkDescriptorPool descriptorPool=VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout=VK_NULL_HANDLE;
   VkPipelineLayout pipelineLayout=VK_NULL_HANDLE;
@@ -231,6 +232,10 @@ struct Lab {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,true);
     info.dstAccelerationStructure=result;
     info.scratchData.deviceAddress=(scratch.address+alignment-1)&~(alignment-1);
+    if(info.type==VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+      blasScratch=info.scratchData.deviceAddress;
+    else if(info.type==VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
+      tlasScratch=info.scratchData.deviceAddress;
     VkAccelerationStructureBuildRangeInfoKHR range{};
     range.primitiveCount=primitive;
     const VkAccelerationStructureBuildRangeInfoKHR* ranges[]={&range};
@@ -247,7 +252,7 @@ static void quad(std::vector<float>& v,
   float a[3]={ax,ay,az},b[3]={bx,by,bz},c[3]={cx,cy,cz},d[3]={dx,dy,dz};
   appendTri(v,a,b,c);appendTri(v,a,c,d);
 }
-static std::vector<float> geometry() {
+static std::vector<float> geometry(float cubeX=0.f) {
   std::vector<float> v;
   // Primitive indices 0-1 are floor; 2-13 are front/right/back/left/top/bottom cube.
   quad(v,-5,0,-5, 5,0,-5, 5,0,5, -5,0,5);
@@ -258,12 +263,14 @@ static std::vector<float> geometry() {
   quad(v,-s,0,-s, -s,0,s, -s,h,s, -s,h,-s);
   quad(v,-s,h,s, s,h,s, s,h,-s, -s,h,-s);
   quad(v,-s,0,-s, s,0,-s, s,0,s, -s,0,s);
+  // Floor occupies the first six vertices. Translate only the cube.
+  for(size_t i=18;i+2<v.size();i+=3)v[i]+=cubeX;
   return v;
 }
-static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_t height,uint32_t passes=1,std::string* measurement=nullptr,uint32_t firstFrame=0) {
+static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_t height,uint32_t passes=1,std::string* measurement=nullptr,uint32_t firstFrame=0,float cubeX=0.f,uint32_t movingFrames=0) {
   Lab lab;
   lab.init();
-  std::vector<float> vertices=geometry();
+  std::vector<float> vertices=geometry(cubeX);
   const uint32_t triangleCount=(uint32_t)vertices.size()/9;
   Buffer vertex=lab.makeBuffer(vertices.size()*sizeof(float),
     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR|VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -366,6 +373,116 @@ static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_
   writes[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[1].descriptorCount=1;
   writes[1].pBufferInfo=&pi;
   vkUpdateDescriptorSets(lab.device,2,writes,0,nullptr);
+  if(movingFrames>0) {
+    if(movingFrames>16)throw std::runtime_error("Too many moving-geometry frames");
+    // GPU timestamps bound the BLAS rebuild, TLAS rebuild and ray-query dispatch.
+    const bool timed=lab.timestampValidBits>0 && lab.timestampPeriod>0;
+    if(timed){
+      VkQueryPoolCreateInfo qc{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+      qc.queryType=VK_QUERY_TYPE_TIMESTAMP;qc.queryCount=2;
+      checked(vkCreateQueryPool(lab.device,&qc,nullptr,&lab.timingQueries),"Moving scene query pool");
+    }
+    double cpuTotal=0.,gpuTotal=0.;
+    uint32_t gpuFrames=0;
+    for(uint32_t frame=0;frame<movingFrames;frame++){
+      const float x=-.6f+1.2f*float(frame)/float(std::max(1u,movingFrames-1));
+      auto frameVerts=geometry(x);
+      lab.upload(vertex,frameVerts.data(),frameVerts.size()*sizeof(float));
+      auto start=std::chrono::steady_clock::now();
+      VkCommandBuffer command=lab.begin();
+      if(timed){
+        vkCmdResetQueryPool(command,lab.timingQueries,0,2);
+        vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,lab.timingQueries,0);
+      }
+      VkMemoryBarrier hostWrite{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      hostWrite.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;
+      hostWrite.dstAccessMask=VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+      vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        0,1,&hostWrite,0,nullptr,0,nullptr);
+      auto buildBlas=binfo;
+      buildBlas.dstAccelerationStructure=lab.blas;
+      buildBlas.scratchData.deviceAddress=lab.blasScratch;
+      VkAccelerationStructureBuildRangeInfoKHR blasRange{};blasRange.primitiveCount=triangleCount;
+      const VkAccelerationStructureBuildRangeInfoKHR* blasRanges[]={&blasRange};
+      lab.cmdBuild(command,1,&buildBlas,blasRanges);
+      VkMemoryBarrier asBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      asBarrier.srcAccessMask=VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+      asBarrier.dstAccessMask=VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+      vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        0,1,&asBarrier,0,nullptr,0,nullptr);
+      auto buildTlas=tinfo;
+      buildTlas.dstAccelerationStructure=lab.tlas;
+      buildTlas.scratchData.deviceAddress=lab.tlasScratch;
+      VkAccelerationStructureBuildRangeInfoKHR tlasRange{};tlasRange.primitiveCount=1;
+      const VkAccelerationStructureBuildRangeInfoKHR* tlasRanges[]={&tlasRange};
+      lab.cmdBuild(command,1,&buildTlas,tlasRanges);
+      VkMemoryBarrier ready{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      ready.srcAccessMask=VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+      ready.dstAccessMask=VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+      vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,1,&ready,0,nullptr,0,nullptr);
+      vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,lab.pipeline);
+      vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,lab.pipelineLayout,0,1,&ds,0,nullptr);
+      uint32_t push[3]={width,height,frame};
+      vkCmdPushConstants(command,lab.pipelineLayout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(push),push);
+      vkCmdDispatch(command,(width+7)/8,(height+7)/8,1);
+      if(timed)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,lab.timingQueries,1);
+      VkMemoryBarrier readback{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      readback.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+      readback.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+      vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,
+        0,1,&readback,0,nullptr,0,nullptr);
+      lab.finish(command);
+      cpuTotal+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+      if(timed){
+        uint64_t stamps[2]={0,0};
+        VkResult qr=vkGetQueryPoolResults(lab.device,lab.timingQueries,0,2,sizeof(stamps),
+          stamps,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT);
+        if(qr==VK_SUCCESS){
+          uint64_t mask=lab.timestampValidBits>=64?UINT64_MAX:((uint64_t(1)<<lab.timestampValidBits)-1u);
+          gpuTotal+=double((stamps[1]-stamps[0])&mask)*double(lab.timestampPeriod)/1000000.;
+          gpuFrames++;
+        }
+      }
+    }
+    char msg[1024];
+    snprintf(msg,sizeof(msg),
+      "TaGunner Vulkan Moving-Geometry RT Lab v0.8\n"
+      "Resolution: %u × %u\n"
+      "Frames rebuilt: %u\n"
+      "Geometry: cube moves left to right, floor stationary\n"
+      "BLAS: REBUILD each frame; TLAS: REBUILD each frame\n"
+      "Shadow: rayQueryEXT primary + shadow ray\n"
+      "CPU submit + queue wait: %.3f ms/frame (includes submission overhead)\n",
+      width,height,movingFrames,cpuTotal/movingFrames);
+    if(measurement)*measurement=msg;
+    if(measurement) {
+      if(gpuFrames==movingFrames){
+        snprintf(msg,sizeof(msg),
+          "GPU AS rebuild + RT dispatch: %.3f ms/frame\n"
+          "GPU-only hypothetical throughput: %.1f frames/sec\n",
+          gpuTotal/movingFrames,gpuTotal>0.?1000.*movingFrames/gpuTotal:0.);
+        *measurement+=msg;
+      }else {
+        *measurement+="GPU timestamps unavailable or incomplete\n";
+      }
+      *measurement+="NOT actual presentation FPS or Roblox FPS. Only 8-16 frames, not a sustained benchmark.\n";
+    }
+    void* mapped=nullptr;
+    checked(vkMapMemory(lab.device,pixels.mem,0,pixels.size,0,&mapped),"Map moving scene output");
+    std::vector<uint32_t> image(width*height);
+    const uint32_t* rgba=(const uint32_t*)mapped;
+    for(size_t i=0;i<image.size();i++){
+      const uint32_t v=rgba[i];
+      image[i]=0xff000000u | ((v&0xffu)<<16) | (v&0xff00u) | ((v>>16)&0xffu);
+    }
+    vkUnmapMemory(lab.device,pixels.mem);
+    return image;
+  }
+
   bool useGpuTimestamps = measurement && lab.timestampValidBits>0 && lab.timestampPeriod>0;
   if(useGpuTimestamps){
     VkQueryPoolCreateInfo ci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
@@ -494,6 +611,43 @@ Java_com_tagunner_rtlab_MainActivity_renderLightFrame(JNIEnv* env,jclass,jobject
     jintArray result=env->NewIntArray((jsize)pixels.size());
     if(result)env->SetIntArrayRegion(result,0,(jsize)pixels.size(),reinterpret_cast<const jint*>(pixels.data()));
     return result;
+  }catch(const std::exception& e){
+    jclass cls=env->FindClass("java/lang/IllegalStateException");
+    if(cls)env->ThrowNew(cls,e.what());
+    return nullptr;
+  }
+}
+
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tagunner_rtlab_MainActivity_benchmarkMovingGeometry(JNIEnv* env,jclass,jobject assetManager,jint w,jint h,jint frames) {
+  try {
+    if(w<100||w>1280||h<100||h>720||frames<2||frames>16)
+      throw std::runtime_error("Moving geometry limits exceeded");
+    AAssetManager* assets=AAssetManager_fromJava(env,assetManager);
+    if(!assets)throw std::runtime_error("AssetManager unavailable");
+    std::string report;
+    auto result=render(assets,(uint32_t)w,(uint32_t)h,1,&report,0,0.f,(uint32_t)frames);
+    if(result.size()!=(size_t)w*h)throw std::runtime_error("Rendered image size invalid");
+    return env->NewStringUTF(report.c_str());
+  } catch(const std::exception& e) {
+    jclass cls=env->FindClass("java/lang/IllegalStateException");
+    if(cls)env->ThrowNew(cls,e.what());
+    return nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_tagunner_rtlab_MainActivity_renderTranslatedCube(JNIEnv* env,jclass,jobject assetManager,jint position) {
+  try {
+    if(position!=0&&position!=1)throw std::runtime_error("Invalid cube position");
+    AAssetManager* assets=AAssetManager_fromJava(env,assetManager);
+    if(!assets)throw std::runtime_error("AssetManager unavailable");
+    const uint32_t width=480,height=300;
+    auto pixels=render(assets,width,height,1,nullptr,0,position==0?-.6f:.6f,0);
+    jintArray arr=env->NewIntArray((jsize)pixels.size());
+    if(arr)env->SetIntArrayRegion(arr,0,(jsize)pixels.size(),(const jint*)pixels.data());
+    return arr;
   }catch(const std::exception& e){
     jclass cls=env->FindClass("java/lang/IllegalStateException");
     if(cls)env->ThrowNew(cls,e.what());
