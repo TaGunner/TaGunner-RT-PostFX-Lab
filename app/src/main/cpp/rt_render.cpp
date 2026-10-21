@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,6 +29,9 @@ struct Lab {
   VkQueue queue=VK_NULL_HANDLE;
   uint32_t family=0;
   VkCommandPool commandPool=VK_NULL_HANDLE;
+  VkQueryPool timingQueries=VK_NULL_HANDLE;
+  uint32_t timestampValidBits=0;
+  float timestampPeriod=0.f;
   VkDescriptorPool descriptorPool=VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout=VK_NULL_HANDLE;
   VkPipelineLayout pipelineLayout=VK_NULL_HANDLE;
@@ -57,6 +61,7 @@ struct Lab {
         if(b.buf)vkDestroyBuffer(device,b.buf,nullptr);
         if(b.mem)vkFreeMemory(device,b.mem,nullptr);
       }
+      if(timingQueries)vkDestroyQueryPool(device,timingQueries,nullptr);
       if(commandPool)vkDestroyCommandPool(device,commandPool,nullptr);
       vkDestroyDevice(device,nullptr);
     }
@@ -102,12 +107,15 @@ struct Lab {
       bool found=false;
       for(uint32_t q=0;q<qN;++q){
         if(families[q].queueCount&&(families[q].queueFlags&VK_QUEUE_COMPUTE_BIT)){
-          gpu=candidate;family=q;found=true;break;
+          gpu=candidate;family=q;timestampValidBits=families[q].timestampValidBits;found=true;break;
         }
       }
       if(found)break;
     }
     if(!gpu)throw std::runtime_error("Ray Query / AS feature or compute queue missing");
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(gpu,&props);
+    timestampPeriod=props.limits.timestampPeriod;
     const char* exts[]={
       VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
       VK_KHR_RAY_QUERY_EXTENSION_NAME,
@@ -252,7 +260,7 @@ static std::vector<float> geometry() {
   quad(v,-s,0,-s, s,0,-s, s,0,s, -s,0,s);
   return v;
 }
-static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_t height) {
+static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_t height,uint32_t passes=1,std::string* measurement=nullptr) {
   Lab lab;
   lab.init();
   std::vector<float> vertices=geometry();
@@ -358,18 +366,75 @@ static std::vector<uint32_t> render(AAssetManager* assets,uint32_t width,uint32_
   writes[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[1].descriptorCount=1;
   writes[1].pBufferInfo=&pi;
   vkUpdateDescriptorSets(lab.device,2,writes,0,nullptr);
+  bool useGpuTimestamps = measurement && lab.timestampValidBits>0 && lab.timestampPeriod>0;
+  if(useGpuTimestamps){
+    VkQueryPoolCreateInfo ci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    ci.queryType=VK_QUERY_TYPE_TIMESTAMP;ci.queryCount=2;
+    checked(vkCreateQueryPool(lab.device,&ci,nullptr,&lab.timingQueries),"Create timestamp query pool");
+  }
   VkCommandBuffer cmd=lab.begin();
+  if(useGpuTimestamps){
+    vkCmdResetQueryPool(cmd,lab.timingQueries,0,2);
+    vkCmdWriteTimestamp(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,lab.timingQueries,0);
+  }
   vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,lab.pipeline);
   vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,lab.pipelineLayout,0,1,&ds,0,nullptr);
   uint32_t wh[2]={width,height};
   vkCmdPushConstants(cmd,lab.pipelineLayout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(wh),wh);
-  vkCmdDispatch(cmd,(width+7)/8,(height+7)/8,1);
+  for(uint32_t pass=0;pass<passes;pass++){
+    vkCmdDispatch(cmd,(width+7)/8,(height+7)/8,1);
+    if(pass+1<passes){
+      VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      memory.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+      memory.dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+      vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,1,&memory,0,nullptr,0,nullptr);
+    }
+  }
+  if(useGpuTimestamps)vkCmdWriteTimestamp(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,lab.timingQueries,1);
   VkMemoryBarrier hostBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
   hostBarrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
   hostBarrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
   vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,
        0,1,&hostBarrier,0,nullptr,0,nullptr);
+  auto cpuStart=std::chrono::steady_clock::now();
   lab.finish(cmd);
+  auto cpuEnd=std::chrono::steady_clock::now();
+  if(measurement) {
+    const double cpuMs=std::chrono::duration<double,std::milli>(cpuEnd-cpuStart).count();
+    char message[1024];
+    int written=snprintf(message,sizeof(message),
+      "TaGunner Vulkan RT benchmark v0.6\n"
+      "GPU: Hardware rayQueryEXT primary + shadow\n"
+      "Scene: fixed floor and cube (no animation)\n"
+      "Resolution: %u x %u\n"
+      "Compute passes: %u\n"
+      "CPU submit + GPU wait: %.3f ms total / %.3f ms per pass\n",
+      width,height,passes,cpuMs,cpuMs/passes);
+    *measurement=message;
+    if(useGpuTimestamps){
+      uint64_t timestamps[2]={0,0};
+      VkResult q=vkGetQueryPoolResults(lab.device,lab.timingQueries,0,2,sizeof(timestamps),timestamps,
+        sizeof(uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT);
+      if(q==VK_SUCCESS){
+        uint64_t mask=lab.timestampValidBits>=64?UINT64_MAX:((uint64_t(1)<<lab.timestampValidBits)-1u);
+        uint64_t diff=(timestamps[1]-timestamps[0])&mask;
+        double gpuTotalMs=(double)diff*(double)lab.timestampPeriod/1000000.;
+        double gpuMs=gpuTotalMs/passes;
+        snprintf(message,sizeof(message),
+          "GPU Vulkan timestamps: %.3f ms total / %.3f ms per pass\n"
+          "GPU-only theoretical rate: %.1f dispatches/sec\n",
+          gpuTotalMs,gpuMs,gpuMs>0.?1000./gpuMs:0.);
+        *measurement+=message;
+      } else {
+        *measurement+="GPU timestamp query failed; VkResult "+std::to_string(q)+"\n";
+      }
+    }else{
+      *measurement+="GPU timestamps unavailable; CPU timings only\n";
+    }
+    *measurement+="CAUTION: This is a STATIC simple scene and GPU dispatch throughput only.\n"
+      "It is NOT Roblox FPS, sustained game FPS, or an animated scene benchmark.\n";
+  }
   void* src=nullptr;
   checked(vkMapMemory(lab.device,pixels.mem,0,pixels.size,0,&src),"Map ray-traced pixels");
   std::vector<uint32_t> image(width*height);
@@ -393,6 +458,24 @@ Java_com_tagunner_rtlab_MainActivity_renderRayQueryScene(JNIEnv* env,jclass,jobj
     jintArray result=env->NewIntArray((jsize)pixels.size());
     if(result)env->SetIntArrayRegion(result,0,(jsize)pixels.size(),reinterpret_cast<const jint*>(pixels.data()));
     return result;
+  }catch(const std::exception& e){
+    jclass cls=env->FindClass("java/lang/IllegalStateException");
+    if(cls)env->ThrowNew(cls,e.what());
+    return nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tagunner_rtlab_MainActivity_benchmarkRayQuery(JNIEnv* env,jclass,jobject assetManager,jint width,jint height,jint passes) {
+  try{
+    if(width<=0||height<=0||width>1920||height>1080||passes<1||passes>32)
+      throw std::runtime_error("Benchmark parameters out of bounds");
+    AAssetManager* assets=AAssetManager_fromJava(env,assetManager);
+    if(!assets)throw std::runtime_error("No AssetManager");
+    std::string measurement;
+    auto pixels=render(assets,(uint32_t)width,(uint32_t)height,(uint32_t)passes,&measurement);
+    if(pixels.size()!=(size_t)width*height)throw std::runtime_error("Invalid rendered pixel buffer");
+    return env->NewStringUTF(measurement.c_str());
   }catch(const std::exception& e){
     jclass cls=env->FindClass("java/lang/IllegalStateException");
     if(cls)env->ThrowNew(cls,e.what());

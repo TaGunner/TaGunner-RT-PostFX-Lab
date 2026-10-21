@@ -26,6 +26,7 @@ public final class MainActivity extends Activity {
   static { System.loadLibrary("tagunner_rt"); }
   private static native String inspectVulkan();
   private static native int[] renderRayQueryScene(android.content.res.AssetManager assets,int width,int height);
+  private static native String benchmarkRayQuery(android.content.res.AssetManager assets,int width,int height,int passes);
   private TextView report,tip;
   private LinearLayout scanPanel,fxPanel;
   private PostFXView fx;
@@ -60,7 +61,7 @@ public final class MainActivity extends Activity {
       });
     }
     root.addView(text("TaGunner  |  RT + PostFX Lab",22,0xff9eceff));
-    root.addView(text("v0.3  •  Offline  •  Vulkan driver test + GPU image effects",12,0xff8aabc7));
+    root.addView(text("v0.6  •  Offline  •  Ray Query benchmark + GPU PostFX",12,0xff8aabc7));
     LinearLayout tabs=new LinearLayout(this);tabs.setOrientation(0);
     Button vkBtn=button("Vulkan / Ray Tracing"),fxBtn=button("GPU PostFX");
     tabs.addView(vkBtn,new LinearLayout.LayoutParams(0,dp(50),1f));
@@ -73,6 +74,14 @@ public final class MainActivity extends Activity {
     scanPanel.addView(scene);
     TextView sceneStatus=text("ทดลองสร้าง BLAS/TLAS แล้วยิงรังสีสร้างภาพบน GPU จริง",12,0xffb1c9e4);
     scanPanel.addView(sceneStatus);
+    scanPanel.addView(text("RT Benchmark • ชาร์จแบตให้เพียงพอ และพักเครื่องถ้าร้อนเกินไป",12,0xffffd6a5));
+    Button benchLow=button("Benchmark 480×300 • 16 เฟรม");
+    Button benchHigh=button("Benchmark 720p • 8 เฟรม");
+    scanPanel.addView(benchLow);
+    scanPanel.addView(benchHigh);
+    TextView benchStatus=text("ยังไม่ได้วัด GPU • ตัวเลขที่ได้เป็นเวลา Dispatch ของฉากนิ่ง ไม่ใช่ FPS ของ Roblox",12,0xffd9f6cf);
+    benchStatus.setTextIsSelectable(true);
+    scanPanel.addView(benchStatus);
     android.widget.ImageView sceneImage=new android.widget.ImageView(this);
     sceneImage.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
     scanPanel.addView(sceneImage,new LinearLayout.LayoutParams(-1,dp(236)));
@@ -98,6 +107,28 @@ public final class MainActivity extends Activity {
     root.addView(fxPanel,new LinearLayout.LayoutParams(-1,0,1));
     setContentView(root);
     vkBtn.setOnClickListener(v->showFx(false));fxBtn.setOnClickListener(v->showFx(true));
+    java.util.concurrent.atomic.AtomicBoolean benchmarking=new java.util.concurrent.atomic.AtomicBoolean(false);
+    java.util.function.IntConsumer doBenchmark=(preset)->{
+      if(!benchmarking.compareAndSet(false,true))return;
+      benchLow.setEnabled(false);benchHigh.setEnabled(false);
+      final int w=preset==0?480:1280;
+      final int h=preset==0?300:720;
+      final int count=preset==0?16:8;
+      benchStatus.setText("Testing "+w+"x"+h+" / "+count+" dispatches ...");
+      new Thread(()->{
+        String result;
+        try{result=benchmarkRayQuery(getAssets(),w,h,count);}
+        catch(Throwable err){result="Benchmark ERROR: "+err.getClass().getSimpleName()+": "+err.getMessage();}
+        final String textResult=result;
+        runOnUiThread(()->{
+          benchStatus.setText(textResult);
+          benchLow.setEnabled(true);benchHigh.setEnabled(true);
+          benchmarking.set(false);
+        });
+      }).start();
+    };
+    benchLow.setOnClickListener(v->doBenchmark.accept(0));
+    benchHigh.setOnClickListener(v->doBenchmark.accept(1));
     scene.setOnClickListener(v->{
       scene.setEnabled(false);
       sceneStatus.setText("กำลังสร้าง Acceleration Structures และเรนเดอร์ด้วย Vulkan...");
@@ -133,7 +164,7 @@ public final class MainActivity extends Activity {
     });
     copy.setOnClickListener(v->{
       ClipboardManager cb=(ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
-      cb.setPrimaryClip(ClipData.newPlainText("TaGunner Vulkan Report",report.getText()));
+      cb.setPrimaryClip(ClipData.newPlainText("TaGunner Vulkan + Benchmark Report",report.getText()+"\n\n"+benchStatus.getText()));
     });
     pick.setOnClickListener(v->{
       Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);

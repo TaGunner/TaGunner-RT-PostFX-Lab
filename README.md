@@ -1,6 +1,15 @@
-# TaGunner RT + PostFX Lab v0.5
+# TaGunner RT + PostFX Lab v0.6
 
 Standalone offline Android GPU lab for **iQOO 13** (and other ARM64 Android Vulkan devices).
+
+## v0.6 Vulkan Ray Query benchmark
+- Adds two benchmark buttons: 480×300 × 16 dispatches, and 1280×720 × 8 dispatches.
+- Measures GPU execution via Vulkan timestamp queries (when supported) and CPU submit + queue-wait time.
+- Displays GPU milliseconds per dispatch and a **theoretical GPU-only** rate, NOT Roblox/game FPS or sustained temperature-tested FPS.
+- Render uses the same BLAS/TLAS, static floor and cube, and primary/shadow rayQueryEXT shader as v0.5.
+- Tests on a background thread and offers a copyable benchmark report.
+- Benchmark repeatedly renders the SAME STATIC SCENE, with no camera/object animation, no frame presentation, no game CPU/physics; **DO NOT interpret the theoretical rate as actual game FPS**.
+- Charge battery sufficiently, use cooling as needed, and stop if overheating. Test the 480x300 preset before 720p.
 
 ## v0.5 experimental hardware ray-traced scene
 - New **เรนเดอร์ 3D ด้วย Hardware Ray Query** button creates a triangle/cube + floor BLAS, TLAS, compute pipeline and GPU storage buffer, then executes a `rayQueryEXT` shader for primary visibility and cast shadows.
