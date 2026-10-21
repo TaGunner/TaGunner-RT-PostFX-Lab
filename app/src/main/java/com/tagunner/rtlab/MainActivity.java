@@ -50,6 +50,14 @@ public final class MainActivity extends Activity {
     super.onCreate(bundle);
     getWindow().setStatusBarColor(0xff090d1b);getWindow().setNavigationBarColor(0xff090d1b);
     LinearLayout root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(14),dp(8),dp(14),dp(12));root.setBackgroundColor(0xff090d1b);
+    // Android 15/16 enforces edge-to-edge for target SDK 35. Respect system bars.
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+      root.setOnApplyWindowInsetsListener((view, insets) -> {
+        android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
+        root.setPadding(dp(14), dp(8) + bars.top, dp(14), dp(12) + bars.bottom);
+        return insets;
+      });
+    }
     root.addView(text("TaGunner  |  RT + PostFX Lab",22,0xff9eceff));
     root.addView(text("v0.3  •  Offline  •  Vulkan driver test + GPU image effects",12,0xff8aabc7));
     LinearLayout tabs=new LinearLayout(this);tabs.setOrientation(0);
@@ -70,7 +78,7 @@ public final class MainActivity extends Activity {
     Button toggle=button("เปรียบเทียบ Before / After");fxPanel.addView(toggle);
     tip=text("GPU PostFX ทำงานกับภาพนิ่ง ไม่ได้ฉีด Shader เข้าเกม Roblox",12,0xffbbcbdd);fxPanel.addView(tip);
     fx=new PostFXView(this);
-    fxPanel.addView(fx,new LinearLayout.LayoutParams(-1,0,1));
+    fxPanel.addView(fx,new LinearLayout.LayoutParams(-1,dp(255)));
     ScrollView sliders=new ScrollView(this);LinearLayout slidersBody=new LinearLayout(this);slidersBody.setOrientation(1);
     controls(slidersBody,"Sharpen",30,x->sharp=x/80f);
     controls(slidersBody,"Vibrance",30,x->vibrance=x/70f);

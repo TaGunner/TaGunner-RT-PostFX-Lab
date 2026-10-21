@@ -1,6 +1,17 @@
-# TaGunner RT + PostFX Lab v0.3
+# TaGunner RT + PostFX Lab v0.4
 
 Standalone offline Android GPU lab for **iQOO 13** (and other ARM64 Android Vulkan devices).
+
+## Latest fixes (v0.4)
+- Correct flipped Roblox screenshot preview in OpenGL ES.
+- Respect Android 15/16 edge-to-edge status/navigation bars.
+- Keep PostFX preview near the controls instead of leaving large vertical gaps.
+
+## Device test evidence (iQOO 13, user supplied)
+- Vulkan 1.3.284, Adreno 830; VK_KHR_ray_query and VK_KHR_acceleration_structure supported; vkCreateDevice succeeded.
+- VK_KHR_ray_tracing_pipeline NOT supported by this driver. This does not block a compute-shader Ray Query implementation.
+- Driver-reported maximum anisotropic filtering: 16x; Vulkan framebufferColorSampleCounts mask 7 corresponds to 1x/2x/4x.
+- **Next milestone:** create BLAS/TLAS and dispatch a shader with rayQueryEXT, then independently confirm actual ray traversal on the device. This APK does not yet do that.
 
 ## What the app tests
 - **Vulkan driver scan:** GPU, API version, extensions, device features for `VK_KHR_ray_query`, `VK_KHR_acceleration_structure`, `VK_KHR_ray_tracing_pipeline`, buffer device address, and sample counts.

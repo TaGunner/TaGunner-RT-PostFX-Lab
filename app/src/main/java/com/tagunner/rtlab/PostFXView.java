@@ -40,7 +40,8 @@ public final class PostFXView extends GLSurfaceView {
       int[] linked=new int[1];GLES30.glGetProgramiv(program,GLES30.GL_LINK_STATUS,linked,0);
       if(linked[0]==0)throw new RuntimeException(GLES30.glGetProgramInfoLog(program));
       GLES30.glDeleteShader(v);GLES30.glDeleteShader(f);
-      float[] q={-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,-1,1,0, 1,1,1,1, -1,1,0,1};
+      // Android Bitmap row 0 is the TOP row; GL sampling origin is BOTTOM-left.
+      float[] q={-1,-1,0,1, 1,-1,1,1, -1,1,0,0, 1,-1,1,1, 1,1,1,0, -1,1,0,0};
       ByteBuffer bb=ByteBuffer.allocateDirect(q.length*4).order(ByteOrder.nativeOrder());
       vertices=bb.asFloatBuffer();vertices.put(q).position(0);
       int[] ids=new int[1];GLES30.glGenVertexArrays(1,ids,0);vao=ids[0];GLES30.glBindVertexArray(vao);
