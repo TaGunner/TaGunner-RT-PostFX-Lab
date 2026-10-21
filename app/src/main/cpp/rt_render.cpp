@@ -91,7 +91,9 @@ struct Lab {
       VkPhysicalDeviceRayQueryFeaturesKHR rq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
       VkPhysicalDeviceFeatures2 f{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
       f.pNext=&addr;addr.pNext=&as;as.pNext=&rq;
-      vkGetPhysicalDeviceFeatures2(candidate,&f);
+      auto getFeatures2=(PFN_vkGetPhysicalDeviceFeatures2)vkGetInstanceProcAddr(instance,"vkGetPhysicalDeviceFeatures2");
+      if(!getFeatures2)throw std::runtime_error("vkGetPhysicalDeviceFeatures2 symbol unavailable");
+      getFeatures2(candidate,&f);
       if(!addr.bufferDeviceAddress||!as.accelerationStructure||!rq.rayQuery)continue;
       uint32_t qN=0;
       vkGetPhysicalDeviceQueueFamilyProperties(candidate,&qN,nullptr);
@@ -211,7 +213,10 @@ struct Lab {
     if(info.type==VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)blas=result;else tlas=result;
     VkPhysicalDeviceAccelerationStructurePropertiesKHR p{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-    props.pNext=&p;vkGetPhysicalDeviceProperties2(gpu,&props);
+    props.pNext=&p;
+    auto getProperties2=(PFN_vkGetPhysicalDeviceProperties2)vkGetInstanceProcAddr(instance,"vkGetPhysicalDeviceProperties2");
+    if(!getProperties2)throw std::runtime_error("vkGetPhysicalDeviceProperties2 symbol unavailable");
+    getProperties2(gpu,&props);
     const VkDeviceSize alignment=std::max((VkDeviceSize)256,(VkDeviceSize)p.minAccelerationStructureScratchOffsetAlignment);
     Buffer scratch=makeBuffer(sizes.buildScratchSize+alignment,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
